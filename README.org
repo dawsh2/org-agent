@@ -48,6 +48,50 @@ its task.  When it's done, it calls =org-agent-mark-done= on itself.
 Press =C-c C-x g= on the heading after it's DONE to review the diff
 in magit.
 
+*** What happens under the hood
+
+*1. Dispatch (=C-c C-x s=)*
+
+A worktree and branch are created for this heading:
+
+#+begin_example
+$ git branch
+* main
+  org-agent/TRY-1          ← new branch forked from main
+
+$ git worktree list
+/home/you/myproject                    abc1234 [main]
+/home/you/myproject/.org-agent/worktrees/TRY-1  def5678 [org-agent/TRY-1]
+#+end_example
+
+The agent's terminal opens with CWD set to the worktree.
+It can edit files freely — the worktree is a full copy of the repo.
+
+*2. Agent works*
+
+The agent edits files in =.org-agent/worktrees/TRY-1/=.  Your main
+working tree is untouched.  You can keep editing on =main= yourself.
+
+*3. NEXT → DONE (=org-agent-mark-done=)*
+
+The state-change hook fires and auto-commits all changes:
+
+#+begin_example
+$ cd .org-agent/worktrees/TRY-1 && git log --oneline -1
+f00cafe [TRY-1] Write a greeting function
+
+$ git diff main..org-agent/TRY-1 --stat
+ src/greet.py | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+#+end_example
+
+The session closes.  The branch stays until the parent merges it.
+
+*4. Review (=C-c C-x g=)*
+
+Opens a magit diff of =main..org-agent/TRY-1= — every file the agent
+touched, ready to review inline.
+
 ** TODO [TRY-2] Decompose a bigger task
 :PROPERTIES:
 :CATEGORY: tutorial
@@ -72,6 +116,86 @@ emacsclient -e '(org-agent-dispatch-batch (list "TRY-2a" "TRY-2b"))'
 Both children work in parallel on isolated worktrees.  When both are
 DONE, set this heading to DONE — the hook merges their branches.
 
+*** What happens under the hood
+
+*1. Parent branch*
+
+TRY-2 is a level-2 heading, so it gets a long-lived branch:
+
+#+begin_example
+$ git branch
+* main
+  org-agent/TRY-2          ← parent branch (forked from main)
+#+end_example
+
+No worktree yet — TODO agents plan, they don't edit.
+
+*2. Children dispatched (=dispatch-batch=)*
+
+Each NEXT child gets its own worktree, branched from the parent:
+
+#+begin_example
+$ git branch
+* main
+  org-agent/TRY-2
+  org-agent/TRY-2a         ← forked from org-agent/TRY-2
+  org-agent/TRY-2b         ← forked from org-agent/TRY-2
+
+$ git worktree list
+/home/you/myproject                              abc1234 [main]
+/home/you/myproject/.org-agent/worktrees/TRY-2a  111aaaa [org-agent/TRY-2a]
+/home/you/myproject/.org-agent/worktrees/TRY-2b  222bbbb [org-agent/TRY-2b]
+#+end_example
+
+Both agents work simultaneously in separate directories.
+Give them disjoint files to avoid merge conflicts.
+
+*3. Children finish (NEXT → DONE)*
+
+Each child auto-commits on its own branch:
+
+#+begin_example
+$ git log --oneline org-agent/TRY-2a
+aaa1111 [TRY-2a] First subtask
+abc1234 (main, org-agent/TRY-2) initial commit
+
+$ git log --oneline org-agent/TRY-2b
+bbb2222 [TRY-2b] Second subtask
+abc1234 (main, org-agent/TRY-2) initial commit
+#+end_example
+
+*4. Parent finishes (TODO → DONE)*
+
+When you mark TRY-2 as DONE, the hook merges both children into the
+parent branch, then cleans up:
+
+#+begin_example
+$ git log --oneline org-agent/TRY-2
+ccc3333 Merge branch 'org-agent/TRY-2b' into org-agent/TRY-2
+ddd4444 Merge branch 'org-agent/TRY-2a' into org-agent/TRY-2
+bbb2222 [TRY-2b] Second subtask
+aaa1111 [TRY-2a] First subtask
+abc1234 initial commit
+
+$ git worktree list
+/home/you/myproject  abc1234 [main]
+#+end_example
+
+Worktrees removed.  Child branches deleted.  Parent branch holds
+the merged result.  If TRY-2 is a root heading (level 2), its
+TODO → DONE also merges =org-agent/TRY-2= into =main=.
+
+*5. Merge conflict?*
+
+If children edited the same files, the merge stops:
+
+#+begin_example
+CONFLICT (content): Merge conflict in src/app.py
+org-agent: merge conflict — TRY-2 stays TODO, resolve manually
+#+end_example
+
+Resolve in =org-agent/TRY-2=, commit, then mark DONE again.
+
 ** TODO [TRY-3] Try a sequential chain
 :PROPERTIES:
 :CATEGORY: tutorial
@@ -90,6 +214,87 @@ emacsclient -e '(org-agent-add-chain "TRY-3"
 finishes, with =TRY-3a='s work already in its worktree.
 
 Default to parallel.  Chains are only for real file dependencies.
+
+*** What happens under the hood
+
+*1. Chain created*
+
+Three children appear in the org tree with =BLOCKER= / =TRIGGER=
+properties (via org-edna):
+
+#+begin_example
+*** NEXT [TRY-3a] Define the interface
+    :PROPERTIES:
+    :TRIGGER: ids(TRY-3b) todo!(NEXT)
+    :END:
+
+*** TODO [TRY-3b] Implement it
+    :PROPERTIES:
+    :BLOCKER: ids(TRY-3a)
+    :TRIGGER: ids(TRY-3c) todo!(NEXT)
+    :END:
+
+*** TODO [TRY-3c] Test it
+    :PROPERTIES:
+    :BLOCKER: ids(TRY-3b)
+    :END:
+#+end_example
+
+Only TRY-3a is NEXT — it dispatches immediately.  TRY-3b and TRY-3c
+are blocked.
+
+*2. TRY-3a works*
+
+#+begin_example
+$ git worktree list
+/home/you/myproject                              [main]
+/home/you/myproject/.org-agent/worktrees/TRY-3a  [org-agent/TRY-3a]
+#+end_example
+
+*3. TRY-3a finishes (NEXT → DONE)*
+
+Auto-commit on =org-agent/TRY-3a=, then rolling merge into the
+parent branch.  This is the key difference from parallel — each
+child's work merges into the parent immediately:
+
+#+begin_example
+$ git log --oneline org-agent/TRY-3
+aaa1111 Merge branch 'org-agent/TRY-3a' into org-agent/TRY-3
+fff0000 [TRY-3a] Define the interface
+abc1234 initial commit
+#+end_example
+
+The TRIGGER fires: TRY-3b flips to NEXT and auto-dispatches.
+Its worktree forks from =org-agent/TRY-3= — which already contains
+TRY-3a's merged work:
+
+#+begin_example
+$ git worktree list
+/home/you/myproject                              [main]
+/home/you/myproject/.org-agent/worktrees/TRY-3b  [org-agent/TRY-3b]
+
+# TRY-3b's worktree has TRY-3a's files:
+$ ls .org-agent/worktrees/TRY-3b/src/
+interface.py     ← written by TRY-3a
+#+end_example
+
+*4. Chain completes*
+
+Each successor sees all predecessor work.  When TRY-3c finishes,
+the parent branch holds the full chain:
+
+#+begin_example
+$ git log --oneline org-agent/TRY-3
+eee5555 Merge branch 'org-agent/TRY-3c' into org-agent/TRY-3
+ddd4444 [TRY-3c] Test it
+ccc3333 Merge branch 'org-agent/TRY-3b' into org-agent/TRY-3
+bbb2222 [TRY-3b] Implement it
+aaa1111 Merge branch 'org-agent/TRY-3a' into org-agent/TRY-3
+fff0000 [TRY-3a] Define the interface
+abc1234 initial commit
+#+end_example
+
+Mark TRY-3 DONE to merge =org-agent/TRY-3= into =main=.
 
 * How it works
 
