@@ -2650,6 +2650,35 @@ NEXT agents call this to commit + close:
   emacsclient -e \\='(org-agent-mark-review \"C-1\")\\='"
   (org-agent-mark-done node-id org-file))
 
+(defun org-agent--clear-satisfied-blocker ()
+  "Remove BLOCKER property if all referenced blockers are satisfied.
+org-edna BLOCKER properties like `ids(Z-4p3) done?' silently prevent
+state transitions even when the referenced heading IS done, due to
+buffer/timing issues.  This function checks each referenced ID and
+clears the BLOCKER if all are satisfied (DONE state)."
+  (let ((blocker (org-entry-get nil "BLOCKER")))
+    (when blocker
+      (let ((ids nil)
+            (all-done t))
+        (save-match-data
+          (let ((start 0))
+            (while (string-match "ids(\\([^)]+\\))" blocker start)
+              (let ((id-str (match-string 1 blocker)))
+                (dolist (raw-id (split-string id-str "[, \t\"']+" t))
+                  (push raw-id ids)))
+              (setq start (match-end 0)))))
+        (dolist (ref-id ids)
+          (let ((ref-pos (org-agent--find-heading-by-id ref-id)))
+            (if ref-pos
+                (save-excursion
+                  (goto-char ref-pos)
+                  (unless (equal (org-get-todo-state) "DONE")
+                    (setq all-done nil)))
+              (setq all-done nil))))
+        (when (and ids all-done)
+          (org-entry-delete nil "BLOCKER")
+          (message "org-agent: cleared satisfied BLOCKER (all refs DONE)"))))))
+
 ;;;###autoload
 (defun org-agent-mark-done (node-id &optional org-file)
   "Mark NODE-ID as DONE.
@@ -2663,7 +2692,12 @@ TODO→DONE: merge all DONE children's branches.  If merge fails, reverts to TOD
         (unless pos
           (error "Heading [%s] not found" node-id))
         (goto-char pos)
+        (org-agent--clear-satisfied-blocker)
         (org-todo "DONE")
+        (let ((post-state (org-get-todo-state)))
+          (unless (equal post-state "DONE")
+            (message "org-agent: [%s] DONE transition blocked (state=%s) — check BLOCKER properties"
+                     node-id post-state)))
         (save-buffer)))
     (let ((final-state (with-current-buffer
                            (org-agent--ensure-fresh-buffer
@@ -2674,7 +2708,8 @@ TODO→DONE: merge all DONE children's branches.  If merge fails, reverts to TOD
                              (org-get-todo-state))))))
       (if (equal final-state "DONE")
           (format "Marked [%s] DONE — merge succeeded" node-id)
-        (format "DONE blocked for [%s] — still %s" node-id final-state)))))
+        (format "DONE blocked for [%s] — still %s (check BLOCKER property)"
+                node-id final-state)))))
 
 ;;;###autoload
 (defun org-agent-add-note (node-id note &optional org-file)
