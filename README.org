@@ -1,0 +1,252 @@
+#+TITLE: org-agent --- orchestrate AI agents via org-mode
+#+STARTUP: overview
+
+* Overview
+
+org-agent binds AI agent sessions to org-mode headings.  Each heading in the task
+file is one agent session.  Parent headings plan and decompose work into children;
+child headings execute in isolated git worktrees.  State transitions
+(TODO -> NEXT -> DONE) trigger auto-commit, merge, and cascading dispatch.
+
+Requires [[https://github.com/smolito/claude-code.el][claude-code.el]] for terminal management.  Supports multiple backends:
+Claude (anthropic), Codex, z.ai.
+
+* Quick Start
+
+** Installation
+
+#+begin_src elisp
+(use-package org-agent
+  :after (org claude-code)
+  :config
+  (org-agent-mode 1))
+#+end_src
+
+** Initialize a project
+
+: M-x org-agent-init-project
+
+Creates =.org-agent/=, installs hooks in =.claude/settings.json=,
+copies CLAUDE.md and .agents.md templates, creates TODO.org if missing.
+
+** Your first agent
+
+1. Open =TODO.org=
+2. Create a heading: =* [A-1] My first task=
+3. Set state to NEXT: =C-c C-t n=
+4. Spawn: =C-c C-x s=
+5. The agent gets an isolated worktree and starts working
+6. When done: =emacsclient -e '(org-agent-mark-done "A-1")'=
+
+* Concepts
+
+** State lifecycle
+
+: TODO -> NEXT -> | -> DONE
+
+- *TODO*: planning/decomposition. Agent has read-only access.
+- *NEXT*: execution. Agent has edit access + worktree isolation.
+- *DONE*: complete. Auto-committed, session closed.
+
+** The org tree is the persistent state
+
+Sessions die. Headings survive. Re-opening resumes.
+
+** Recursive decomposition
+
+Parent plans -> children execute. Children can themselves be parents.
+Recursive until leaves are atomic.
+
+* Workflows
+
+** Single agent
+
+1. Create heading: =[A-1] Implement auth=
+2. Set state: =NEXT=
+3. Spawn: =C-c C-x s=
+4. Agent works in isolated worktree
+5. Mark done: =emacsclient -e '(org-agent-mark-done "A-1")'=
+6. Changes auto-committed on branch
+
+** Parallel children
+
+#+begin_src elisp :eval no
+;; Parent creates children
+(org-agent-add-child "A-1" "[A-1a] Frontend auth" "NEXT")
+(org-agent-add-child "A-1" "[A-1b] Backend auth" "NEXT")
+;; Batch dispatch
+(org-agent-dispatch-batch (list "A-1a" "A-1b"))
+#+end_src
+
+Children work in parallel on isolated worktrees.
+When both DONE, parent's TODO->DONE merges all branches.
+
+** Sequential chain (data dependencies)
+
+#+begin_src elisp :eval no
+;; A-1a defines types that A-1b needs
+(org-agent-add-chain "A-1"
+  (list "[A-1a] Define types" "[A-1b] Implement" "[A-1c] Test"))
+#+end_src
+
+First child dispatches immediately. Each successor auto-dispatches
+when predecessor completes. Each successor's worktree includes
+all predecessor work (rolling merge into parent branch).
+
+** Inter-agent messaging
+
+#+begin_src bash :eval no
+# Live message (immediate, not persisted)
+emacsclient -e '(org-agent-send "A-1" "Please also handle OAuth" t)'
+
+# Persistent note (survives session restarts)
+emacsclient -e '(org-agent-add-note "A-1" "OAuth support added")'
+
+# Read another agent's subtree
+emacsclient -e '(org-agent-read-subtree "A-1")'
+#+end_src
+
+** File ownership (OWNS_PATHS)
+
+#+begin_src bash :eval no
+emacsclient -e '(with-current-buffer (org-agent--org-buffer)
+  (goto-char (org-agent--find-heading-by-id "A-1a"))
+  (org-entry-put nil "OWNS_PATHS" "src/auth/"))'
+#+end_src
+
+Edit guard blocks writes outside declared paths.
+Auto-recorded on NEXT->DONE from git diff.
+
+** Backend selection
+
+#+begin_src elisp :eval no
+;; Per-heading (inheritable via org properties)
+(org-agent-set-backend "A-1" "codex")
+
+;; Global default
+(setq org-agent-default-backend "codex")
+#+end_src
+
+Backends: =anthropic= (Claude), =codex= (Codex), =zai= (z.ai).
+
+* Configuration
+
+** Required
+
+#+begin_src elisp :eval no
+(setq org-agent-org-filename "TODO.org")  ;; default
+#+end_src
+
+** Project-specific formatting
+
+#+begin_src elisp :eval no
+;; Rust project
+(setq org-agent-pre-commit-formatter "cargo fmt")
+(setq org-agent-merge-formatter "rustfmt")
+
+;; Python project
+(setq org-agent-pre-commit-formatter "black .")
+
+;; JavaScript project
+(setq org-agent-pre-commit-formatter "prettier --write .")
+#+end_src
+
+** Custom methodology
+
+#+begin_src elisp :eval no
+;; Use a file
+(setq org-agent-methodology-file "docs/methodology.md")
+
+;; Or inline text
+(setq org-agent-methodology-text "## My Methodology\n...")
+#+end_src
+
+** Backward compat (existing claude-org projects)
+
+#+begin_src elisp :eval no
+(setq org-agent-state-directory ".claude/tree"
+      org-agent-worktree-directory ".claude/worktrees"
+      org-agent-instructions-file ".claude/CLAUDE.md"
+      org-agent-pre-commit-formatter "cargo fmt")
+#+end_src
+
+All =claude-org-*= function names are aliased to =org-agent-*= for
+backward compatibility, so existing guard scripts and running agents
+continue to work.
+
+* Keybindings
+
+| Key         | Command                     | Description                  |
+|-------------+-----------------------------+------------------------------|
+| C-c C-x s   | org-agent-spawn             | Spawn agent at point         |
+| C-c C-x b   | org-agent-batch             | Batch-spawn NEXT leaves      |
+| C-c C-x p   | org-agent-plan              | Decompose into children      |
+| C-c C-x r   | org-agent-review            | Review DONE children         |
+| C-c C-x q   | org-agent-finish-review     | Close review sessions        |
+| C-c C-x k   | org-agent-kill              | Kill session                 |
+| C-c C-x d   | org-agent-purge-node        | Purge session from disk      |
+| C-c C-x g   | org-agent-show-diff         | Show node's git diff         |
+| C-c C-x l   | org-agent-dashboard         | Open agent dashboard         |
+| C-c C-x o   | org-agent-switch-session    | Switch to another session    |
+| C-c C-x n   | org-agent-capture           | File TODO from any buffer    |
+| C-c C-x j   | org-agent-next-waiting      | Jump to next waiting agent   |
+
+* Git Model
+
+** Branch topology
+
+- Level-2 headings get long-lived branches from main
+- Children fork from parent's branch (not main)
+- Only root TODO->DONE merges to main
+
+** Worktree lifecycle
+
+1. Dispatch: creates worktree + branch
+2. Work: agent edits files normally
+3. NEXT->DONE: auto-commit, close session
+4. TODO->DONE: merge all children, remove worktrees
+
+** Recovery
+
+#+begin_src bash :eval no
+# Recreate a deleted worktree
+git worktree prune
+git worktree add -b <branch> .org-agent/worktrees/<id> <root-branch>
+emacsclient -e '(org-agent-dispatch "<id>")'
+#+end_src
+
+* Guard Scripts
+
+** Edit guard
+
+Blocks Edit/Write/NotebookEdit when:
+- Agent is not NEXT (REVIEW, DONE states blocked)
+- Agent writes outside its OWNS_PATHS
+- Parent agent edits files owned by DONE children
+
+** Commit guard
+
+Blocks =git commit= when:
+- Agent is NEXT but has no worktree (shared branch)
+- Forces the auto-commit path via mark-done
+
+* Extending org-agent
+
+** Adding a new backend
+
+#+begin_src elisp :eval no
+(push '("my-backend" . (:require my-backend-code
+                         :term-make my-backend--term-make
+                         :term-send-string my-backend--term-send-string
+                         :term-configure my-backend--term-configure
+                         :term-setup-keymap my-backend--term-setup-keymap
+                         :term-customize-faces my-backend--term-customize-faces
+                         :event-hook my-backend-event-hook))
+      org-agent-backend-adapters)
+#+end_src
+
+** Hooks
+
+- =org-agent-pre-execute-hook= -- before spawning (receives plist)
+- =org-agent-post-execute-hook= -- after completion
+- =org-agent-state-change-hook= -- on TODO state change
