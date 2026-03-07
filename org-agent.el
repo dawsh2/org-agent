@@ -1454,6 +1454,11 @@ Returns t on success, nil if commit failed or no worktree exists."
             ;; Stage and commit
             (let ((msg (format "feat(%s): %s\n\nOrg-Node: %s" node-id title node-id)))
               (call-process "git" nil nil nil "add" "-A")
+              ;; Unstage worktree-local state dirs — these are artifacts,
+              ;; not code changes, and cause spurious merge conflicts.
+              (dolist (dir '(".claude/" ".org-agent/"))
+                (when (file-directory-p dir)
+                  (call-process "git" nil nil nil "reset" "HEAD" "--" dir)))
               (let ((exit-code
                      (with-temp-buffer
                        (call-process "git" nil t nil "commit" "-m" msg))))
