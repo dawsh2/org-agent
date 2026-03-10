@@ -3,6 +3,8 @@
 #+TODO: TODO(t) NEXT(n) | DONE(d)
 #+STARTUP: overview
 
+!! WARNING !! - This is a VIBE SLOP codebase, use at your own risk! 
+
 * What is this?
 
 Any org heading can be an agent session.  Press =C-c C-x s= on a
