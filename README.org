@@ -3,7 +3,8 @@
 #+TODO: TODO(t) NEXT(n) | DONE(d)
 #+STARTUP: overview
 
-!! WARNING !! - This is a VIBE SLOP codebase with git integration, so use at your own risk! Highly recommend starting with some dummy tasks to ensure everything mostly works before risking losing real work. Pull requests/forks welcome. This file is designed to be an interactive tutorial.
+!! WARNING !! - This is a VIBE SLOP codebase with git integration, so use at your own risk! Highly recommend starting with some dummy tasks to ensure everything mostly works before risking losing real work. Pull requests/forks welcome. This file is designed to be an interactive tutorial. Requires org-edna and claude-code.el
+https://github.com/stevemolitor/claude-code.el
 
 * What is this?
 
